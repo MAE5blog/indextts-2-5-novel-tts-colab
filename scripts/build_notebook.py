@@ -189,7 +189,7 @@ cells = [
         # BOOK_SOURCE = "repo_demo" 可先用仓库原创短文本；正式任务设为 "storage"。
         BOOK_SOURCE = "repo_demo"  # "repo_demo" 或 "storage"
         BOOK_FILE_NAME = "book.txt"  # 仅 BOOK_SOURCE="storage" 时使用；支持 .txt/.md/.markdown
-        REFERENCE_AUDIO_FILE = "reference.wav"  # 你的授权参考音频，放在 INPUTS_DIR
+        REFERENCE_AUDIO_FILE = "古龙评书（干声）.flac"  # 你的授权参考音频，放在 INPUTS_DIR
         JOB_NAME = "indextts25_trial"
         LANG = "ZH"
 
