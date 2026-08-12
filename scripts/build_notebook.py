@@ -105,6 +105,8 @@ cells = [
     markdown("## 3. 选择任务存储位置"),
     code(
         """
+        from pathlib import Path
+
         # 正式任务保持 drive；content 只适合手工放入 /content 后的单段试听，运行时结束会清空。
         STORAGE_MODE = "drive"  # "drive" 或 "content"
         DRIVE_ROOT = "MyDrive/IndexTTS_2_5_Novel"
@@ -175,23 +177,48 @@ cells = [
             inherited = env.get("PYTHONPATH", "")
             env["PYTHONPATH"] = os.pathsep.join([str(REPO_DIR), str(UPSTREAM_DIR), inherited])
             command = [str(VENV_PY), str(CLI), *map(str, args)]
-            print("+", " ".join(command))
             return subprocess.run(command, env=env, check=True, text=True, capture_output=capture_output)
+
+        def job_summary():
+            manifest_path = JOB_DIR / "manifest.json"
+            if not manifest_path.is_file():
+                print("尚未建立任务清单。请先运行第 7 节。")
+                return None
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            counts = {}
+            for segment in manifest["segments"]:
+                status = segment.get("status", "unknown")
+                counts[status] = counts.get(status, 0) + 1
+            summary = {
+                "状态": manifest.get("status"),
+                "总段数": len(manifest["segments"]),
+                "已完成": counts.get("completed", 0),
+                "待生成": counts.get("pending", 0),
+                "失败": counts.get("failed", 0),
+                "任务目录": str(JOB_DIR),
+            }
+            print(summary)
+            return summary
 
         preflight = worker("preflight", capture_output=True)
         print(preflight.stdout)
+        print("生成器已就绪。")
         """
     ),
     markdown("## 6. 输入与任务配置（只改这一格）"),
     code(
         """
-        # 把已获授权的参考音频放到 INPUTS_DIR；不要提交它到 GitHub。
-        # BOOK_SOURCE = "repo_demo" 可先用仓库原创短文本；正式任务设为 "storage"。
-        BOOK_SOURCE = "repo_demo"  # "repo_demo" 或 "storage"
-        BOOK_FILE_NAME = "book.txt"  # 仅 BOOK_SOURCE="storage" 时使用；支持 .txt/.md/.markdown
+        # storage 用 Drive 文件；inline 可将下方文字保存到 Drive；repo_demo 仅试跑原创短文本。
+        BOOK_SOURCE = "storage"  # "storage"、"inline" 或 "repo_demo"
+        BOOK_FILE_NAME = "chapter01_background_test.txt"  # storage / inline 时使用
         REFERENCE_AUDIO_FILE = "古龙评书（干声）.flac"  # 你的授权参考音频，放在 INPUTS_DIR
-        JOB_NAME = "indextts25_trial"
+        JOB_NAME = "history_ch01_background_t4_20260812"
         LANG = "ZH"
+
+        # 仅 BOOK_SOURCE="inline" 时使用；可直接粘贴短文本或一个章节。
+        BOOK_TEXT = \\"\\"\"
+        夜里刚下过一阵小雨，窗外的梧桐叶还挂着水珠。
+        \\"\\"\"
 
         # 这些参数会写入 manifest；改动后请改 JOB_NAME，避免混用旧成品。
         TARGET_CHARS = 60
@@ -202,8 +229,16 @@ cells = [
             BOOK_PATH = REPO_DIR / "examples" / "original_demo.txt"
         elif BOOK_SOURCE == "storage":
             BOOK_PATH = INPUTS_DIR / BOOK_FILE_NAME
+        elif BOOK_SOURCE == "inline":
+            if not BOOK_TEXT.strip():
+                raise ValueError("BOOK_TEXT 为空：请粘贴需要生成的文字。")
+            BOOK_PATH = INPUTS_DIR / BOOK_FILE_NAME
+            if BOOK_PATH.suffix.lower() not in {".txt", ".md", ".markdown"}:
+                raise ValueError("BOOK_FILE_NAME 请使用 .txt、.md 或 .markdown 后缀。")
+            BOOK_PATH.write_text(BOOK_TEXT.strip() + "\\n", encoding="utf-8")
+            print("已将粘贴文本保存到：", BOOK_PATH)
         else:
-            raise ValueError("BOOK_SOURCE 只能是 'repo_demo' 或 'storage'")
+            raise ValueError("BOOK_SOURCE 只能是 'storage'、'inline' 或 'repo_demo'")
         REFERENCE_AUDIO_PATH = INPUTS_DIR / REFERENCE_AUDIO_FILE
         JOB_DIR = JOBS_DIR / JOB_NAME
         if not BOOK_PATH.is_file():
@@ -229,6 +264,8 @@ cells = [
             "--hard-chars", HARD_CHARS,
             "--max-tokens", MAX_TEXT_TOKENS,
         )
+        print("任务清单已就绪；同名、同配置任务会保留已生成的片段。")
+        job_summary()
         """
     ),
     markdown("## 8. 必做：先试听一段"),
@@ -246,67 +283,68 @@ cells = [
             "--text", SMOKE_TEXT,
             "--lang", LANG,
         )
+        print("试听已生成：", SMOKE_WAV)
         display(Audio(str(SMOKE_WAV)))
         """
     ),
-    markdown("## 9. 连续十段压力测试（建议在 T4 上先执行）"),
+    markdown("## 9. 继续生成下一批（每次最多 10 段，可反复运行）"),
     code(
         """
-        # 这会在一次 Python 进程中加载模型并连续渲染十段。成功后再考虑全书。
-        worker(
+        # 自动跳过已完成的片段，从下一个待生成片段继续。
+        # 只要 Drive 已挂载，断连后重跑 0、3–7、9 即可继续。
+        BATCH_SIZE = 10
+        RETRY_FAILED_SEGMENTS = False
+        render_args = [
             "render",
             "--job-dir", JOB_DIR,
             "--model-dir", MODEL_DIR,
             "--reference-audio", REFERENCE_AUDIO_PATH,
             "--lang", LANG,
-            "--limit", "10",
-        )
-        """
-    ),
-    markdown("## 10. 生成全书（默认关闭，确认后才运行）"),
-    code(
-        """
-        # 试听和十段测试都满意后才改为 True。content 模式禁止全书，避免断连后丢失全部结果。
-        CONFIRM_RUN_FULL_BOOK = False
-
-        if CONFIRM_RUN_FULL_BOOK:
-            if STORAGE_MODE != "drive":
-                raise RuntimeError("全书生成必须使用 Google Drive 持久化目录。")
-            worker(
-                "render",
-                "--job-dir", JOB_DIR,
-                "--model-dir", MODEL_DIR,
-                "--reference-audio", REFERENCE_AUDIO_PATH,
-                "--lang", LANG,
-            )
+            "--limit", BATCH_SIZE,
+        ]
+        if RETRY_FAILED_SEGMENTS:
+            render_args.append("--retry-failed")
+        worker(*render_args)
+        summary = job_summary()
+        if summary and summary["待生成"] == 0 and summary["失败"] == 0:
+            print("全部片段已完成，可以运行第 10 节合并。")
         else:
-            print("未执行全书生成：先确认试听、十段压力测试和授权范围。")
+            print("还未全部完成时，直接再次运行本单元格即可。")
         """
     ),
-    markdown("## 11. 合并为 WAV 与 M4B（只有全部片段完成后执行）"),
+    markdown("## 10. 合并、导出并播放成品（全部完成后运行）"),
     code(
         """
-        CONFIRM_EXPORT = False
-        if CONFIRM_EXPORT:
+        from IPython.display import Audio, display
+
+        EXPORT_M4B = False
+        summary = job_summary()
+        if summary is None or summary["待生成"] or summary["失败"]:
+            print("尚未全部生成完毕：请继续运行第 9 节。")
+        else:
             exports = JOB_DIR / "exports"
-            worker(
+            wav_path = exports / f"{JOB_NAME}.wav"
+            merge_args = [
                 "merge",
                 "--job-dir", JOB_DIR,
-                "--wav", exports / "audiobook.wav",
-                "--m4b", exports / "audiobook.m4b",
+                "--wav", wav_path,
+            ]
+            if EXPORT_M4B:
+                merge_args += ["--m4b", exports / f"{JOB_NAME}.m4b"]
+            worker(
+                *merge_args,
             )
-            print("导出目录：", exports)
-        else:
-            print("未执行导出：仅在 manifest 显示 rendered 后打开。")
+            print("成品已导出到：", exports)
+            display(Audio(str(wav_path)))
         """
     ),
     markdown(
         """
         ## 恢复与常见问题
 
-        - **Colab 断连或 GPU 回收**：重新运行 0、3、4、5、6、7、10。已有的有效 WAV 会被跳过。
+        - **Colab 断连或 GPU 回收**：重新运行 0、3、4、5、6、7、9。已有的有效 WAV 会被跳过。
         - **T4 在模型加载时 OOM**：这是免费 T4 的实验性边界，不要改成 BF16 或自行伪造 FP16；换到 L4/4090/A100 级 GPU 后再试。
-        - **某一段失败**：打开 `jobs/<JOB_NAME>/manifest.json` 查看 `error`。修正文本或换新的 `JOB_NAME` 后重建；如果只是临时网络/运行时问题，可给 `render` 加 `--retry-failed`。
+        - **某一段失败**：第 9 节会显示失败数。确认是临时问题后，把其中的 `RETRY_FAILED_SEGMENTS` 改为 `True` 再运行；若书稿或参数有调整，请换 `JOB_NAME` 后从第 7 节重建。
         - **没有声音 / 失真**：保持官方锁定的 Python 3.11、Torch 2.8 环境；不要把 Colab 内核的 Torch 版本混入上游环境。
         """
     ),
